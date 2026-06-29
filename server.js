@@ -4,6 +4,14 @@ const ERRORS = require("./errors");
 const cors = require("cors");
 const swaggerUi = require("swagger-ui-express");
 const swaggerJsdoc = require("swagger-jsdoc");
+const { createClient } = require("@supabase/supabase-js");
+
+require("dotenv").config();
+
+const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 const app = express();
 const PORT = 3000;
@@ -33,8 +41,6 @@ const swaggerOptions = {
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
-
-let users = [];
 
 /**
  * @swagger
@@ -169,7 +175,29 @@ let users = [];
  *               items:
  *                 $ref: '#/components/schemas/User'
  */
-app.get("/users", (req, res) => {
+app.get("/users", async (req, res) => {
+
+    const { data, error } = await supabase
+        .from("users")
+        .select("*");
+
+    if (error) {
+        return res.status(500).json(error);
+    }
+
+    const users = data.map(u => ({
+        gender: u.gender,
+        name: {
+            title: "",
+            first: u.first_name,
+            last: u.last_name
+        },
+        email: u.email,
+        login: {
+            uuid: u.uuid
+        }
+    }));
+
     res.status(200).json(users);
 });
 
@@ -215,13 +243,15 @@ app.options("/users", (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.get("/users/:id", (req, res) => {
+app.get("/users/:id", async (req, res) => {
 
-    const user = users.find(
-        u => u.login.uuid === req.params.id
-    );
+    const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("uuid", req.params.id)
+        .single();
 
-    if (!user) {
+    if (error || !data) {
         return sendError(
             res,
             404,
@@ -229,7 +259,18 @@ app.get("/users/:id", (req, res) => {
         );
     }
 
-    res.status(200).json(user);
+    res.status(200).json({
+        gender: data.gender,
+        name: {
+            title: "",
+            first: data.first_name,
+            last: data.last_name
+        },
+        email: data.email,
+        login: {
+            uuid: data.uuid
+        }
+    });
 });
 
 /**
@@ -248,13 +289,14 @@ app.get("/users/:id", (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.delete("/users/:id", (req, res) => {
+app.delete("/users/:id", async (req, res) => {
 
-    const index = users.findIndex(
-        u => u.login.uuid === req.params.id
-    );
+    const { error } = await supabase
+        .from("users")
+        .delete()
+        .eq("uuid", req.params.id);
 
-    if (index === -1) {
+    if (error) {
         return sendError(
             res,
             404,
@@ -262,9 +304,7 @@ app.delete("/users/:id", (req, res) => {
         );
     }
 
-    users.splice(index, 1);
-
-    res.status(204).send();
+    res.sendStatus(204);
 });
 
 /**
@@ -291,7 +331,7 @@ app.delete("/users/:id", (req, res) => {
  *       400:
  *         $ref: '#/components/responses/InvalidUserData'
  */
-app.post("/users", (req, res) => {
+app.post("/users", async (req, res) => {
 
     const { firstName, lastName, email } = req.body;
 
@@ -303,22 +343,36 @@ app.post("/users", (req, res) => {
         );
     }
 
-    const newUser = {
-        gender: null,
+    const uuid = crypto.randomUUID();
+
+    const { data, error } = await supabase
+        .from("users")
+        .insert({
+            uuid,
+            first_name: firstName,
+            last_name: lastName,
+            email,
+            gender: null
+        })
+        .select()
+        .single();
+
+    if (error) {
+        return res.status(500).json(error);
+    }
+
+    res.status(201).json({
+        gender: data.gender,
         name: {
             title: "",
-            first: firstName,
-            last: lastName
+            first: data.first_name,
+            last: data.last_name
         },
-        email,
+        email: data.email,
         login: {
-            uuid: crypto.randomUUID()
+            uuid: data.uuid
         }
-    };
-
-    users.push(newUser);
-
-    res.status(201).json(newUser);
+    });
 });
 
 /**
@@ -349,7 +403,7 @@ app.post("/users", (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.put("/users/:id", (req, res) => {
+app.put("/users/:id", async (req, res) => {
 
     const { firstName, lastName, email } = req.body;
 
@@ -361,11 +415,18 @@ app.put("/users/:id", (req, res) => {
         );
     }
 
-    const index = users.findIndex(
-        u => u.login.uuid === req.params.id
-    );
+    const { data, error } = await supabase
+        .from("users")
+        .update({
+            first_name: firstName,
+            last_name: lastName,
+            email
+        })
+        .eq("uuid", req.params.id)
+        .select()
+        .single();
 
-    if (index === -1) {
+    if (error || !data) {
         return sendError(
             res,
             404,
@@ -373,17 +434,18 @@ app.put("/users/:id", (req, res) => {
         );
     }
 
-    users[index] = {
-        ...users[index],
+    res.status(201).json({
+        gender: data.gender,
         name: {
-            ...users[index].name,
-            first: firstName,
-            last: lastName
+            title: "",
+            first: data.first_name,
+            last: data.last_name
         },
-        email
-    };
-
-    res.status(200).json(users[index]);
+        email: data.email,
+        login: {
+            uuid: data.uuid
+        }
+    });
 });
 
 /**
@@ -412,7 +474,7 @@ app.put("/users/:id", (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.patch("/users/:id", (req, res) => {
+app.patch("/users/:id", async (req, res) => {
 
     const user = users.find(
         u => u.login.uuid === req.params.id
@@ -428,19 +490,39 @@ app.patch("/users/:id", (req, res) => {
 
     const { firstName, lastName, email } = req.body;
 
+    const updateData = {};
+
     if (firstName) {
-        user.name.first = firstName;
+        updateData.first_name = firstName;
     }
 
     if (lastName) {
-        user.name.last = lastName;
+        updateData.last_name = lastName;
     }
 
     if (email) {
-        user.email = email;
+        updateData.email = email;
     }
 
-    res.status(200).json(user);
+    const { data, error } = await supabase
+        .from("users")
+        .update(updateData)
+        .eq("uuid", req.params.id)
+        .select()
+        .single();
+
+    res.status(201).json({
+        gender: data.gender,
+        name: {
+            title: "",
+            first: data.first_name,
+            last: data.last_name
+        },
+        email: data.email,
+        login: {
+            uuid: data.uuid
+        }
+    });
 });
 
 /**
@@ -482,22 +564,46 @@ function sendError(res, httpCode, error) {
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);
     try {
-        const response = await fetch(
-            "https://randomuser.me/api/?results=50"
-        );
+        const { count } = await supabase
+            .from("users")
+            .select("*", {
+                count: "exact",
+                head: true
+            });
+
+        if (count > 0) {
+            console.log(`Database already contains ${count} users`);
+            return;
+        }
+
+        console.log("Database empty. Loading initial users...");
+
+        const response = await fetch("https://randomuser.me/api/?results=50");
 
         if (!response.ok) {
-            return sendError(
-                res,
-                500,
-                ERRORS.RANDOM_USER_API_ERROR
-            );
+            console.log("Could not retrieve users from Random User API");
         }
 
         const data = await response.json();
 
-        users = data.results;
+        const users = data.results.map(user => ({
+            uuid: user.login.uuid,
+            first_name: user.name.first,
+            last_name: user.name.last,
+            email: user.email,
+            gender: user.gender
+        }));
+
+        const { error } = await supabase
+            .from("users")
+            .insert(users);
+
+        if (error) {
+            console.error(error);
+            return;
+        }
+        console.log(`${users.length} users inserted`);
     } catch (error) {
-        console.error('Error getting users from random users', error);
+        console.error(error);
     }
 });
