@@ -4,9 +4,10 @@ const ERRORS = require("./errors");
 const cors = require("cors");
 const swaggerUi = require("swagger-ui-express");
 const swaggerJsdoc = require("swagger-jsdoc");
-
+require("dotenv").config();
 const app = express();
 const PORT = 3000;
+const db = require("./firebase");
 
 app.use(express.json());
 
@@ -33,8 +34,6 @@ const swaggerOptions = {
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
-
-let users = [];
 
 /**
  * @swagger
@@ -169,7 +168,19 @@ let users = [];
  *               items:
  *                 $ref: '#/components/schemas/User'
  */
-app.get("/users", (req, res) => {
+app.get("/users", async (req, res) => {
+
+    const snapshot = await db
+        .collection("users")
+        .get();
+
+    const users = snapshot.docs.map(doc => ({
+        login: {
+            uuid: doc.id
+        },
+        ...doc.data()
+    }));
+
     res.status(200).json(users);
 });
 
@@ -215,13 +226,14 @@ app.options("/users", (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.get("/users/:id", (req, res) => {
+app.get("/users/:id", async (req, res) => {
 
-    const user = users.find(
-        u => u.login.uuid === req.params.id
-    );
+    const doc = await db
+        .collection("users")
+        .doc(req.params.id)
+        .get();
 
-    if (!user) {
+    if (!doc.exists) {
         return sendError(
             res,
             404,
@@ -229,7 +241,12 @@ app.get("/users/:id", (req, res) => {
         );
     }
 
-    res.status(200).json(user);
+    res.status(200).json({
+        login: {
+            uuid: doc.id
+        },
+        ...doc.data()
+    });
 });
 
 /**
@@ -248,21 +265,12 @@ app.get("/users/:id", (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.delete("/users/:id", (req, res) => {
+app.delete("/users/:id", async (req, res) => {
 
-    const index = users.findIndex(
-        u => u.login.uuid === req.params.id
-    );
-
-    if (index === -1) {
-        return sendError(
-            res,
-            404,
-            ERRORS.USER_NOT_FOUND
-        );
-    }
-
-    users.splice(index, 1);
+    await db
+        .collection("users")
+        .doc(req.params.id)
+        .delete();
 
     res.status(204).send();
 });
@@ -291,7 +299,7 @@ app.delete("/users/:id", (req, res) => {
  *       400:
  *         $ref: '#/components/responses/InvalidUserData'
  */
-app.post("/users", (req, res) => {
+app.post("/users", async (req, res) => {
 
     const { firstName, lastName, email } = req.body;
 
@@ -303,22 +311,35 @@ app.post("/users", (req, res) => {
         );
     }
 
-    const newUser = {
-        gender: null,
-        name: {
-            title: "",
-            first: firstName,
-            last: lastName
-        },
-        email,
-        login: {
-            uuid: crypto.randomUUID()
-        }
-    };
+    try {
+        const uuid = crypto.randomUUID();
+        const user = {
+            gender: null,
+            name: {
+                title: "",
+                first: firstName,
+                last: lastName
+            },
+            email
+        };
 
-    users.push(newUser);
+        await db
+            .collection("users")
+            .doc(uuid)
+            .set(user);
 
-    res.status(201).json(newUser);
+        res.status(201).json({
+            ...user,
+            login: {
+                uuid
+            }
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({
+            message: "Internal server error"
+        });
+    }
 });
 
 /**
@@ -349,7 +370,7 @@ app.post("/users", (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.put("/users/:id", (req, res) => {
+app.put("/users/:id", async (req, res) => {
 
     const { firstName, lastName, email } = req.body;
 
@@ -361,29 +382,46 @@ app.put("/users/:id", (req, res) => {
         );
     }
 
-    const index = users.findIndex(
-        u => u.login.uuid === req.params.id
-    );
+    try {
+        const docRef = db
+            .collection("users")
+            .doc(req.params.id);
 
-    if (index === -1) {
-        return sendError(
-            res,
-            404,
-            ERRORS.USER_NOT_FOUND
-        );
+        const snapshot = await docRef.get();
+
+        if (!snapshot.exists) {
+            return sendError(
+                res,
+                404,
+                ERRORS.USER_NOT_FOUND
+            );
+        }
+
+        const updatedUser = {
+            gender: snapshot.data().gender,
+            name: {
+                title: "",
+                first: firstName,
+                last: lastName
+            },
+            email
+        };
+
+        await docRef.set(updatedUser);
+
+        res.status(200).json({
+            ...updatedUser,
+            login: {
+                uuid: req.params.id
+            }
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({
+            message: "Internal server error"
+        });
     }
-
-    users[index] = {
-        ...users[index],
-        name: {
-            ...users[index].name,
-            first: firstName,
-            last: lastName
-        },
-        email
-    };
-
-    res.status(200).json(users[index]);
 });
 
 /**
@@ -412,35 +450,74 @@ app.put("/users/:id", (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.patch("/users/:id", (req, res) => {
+app.patch("/users/:id", async (req, res) => {
 
-    const user = users.find(
-        u => u.login.uuid === req.params.id
-    );
+    try {
+        const docRef = db
+            .collection("users")
+            .doc(req.params.id);
 
-    if (!user) {
-        return sendError(
-            res,
-            404,
-            ERRORS.USER_NOT_FOUND
-        );
+        const snapshot = await docRef.get();
+
+        if (!snapshot.exists) {
+            return sendError(
+                res,
+                404,
+                ERRORS.USER_NOT_FOUND
+            );
+        }
+
+        const currentUser = snapshot.data();
+
+        const {
+            firstName,
+            lastName,
+            email
+        } = req.body;
+
+        const updatedFields = {};
+
+        if (firstName) {
+            updatedFields.name = {
+                ...currentUser.name,
+                first: firstName
+            };
+
+        }
+
+        if (lastName) {
+            updatedFields.name = updatedFields.name
+                ? {
+                    ...updatedFields.name,
+                    last: lastName
+                }
+                : {
+                    ...currentUser.name,
+                    last: lastName
+                };
+
+        }
+
+        if (email) {
+            updatedFields.email = email;
+        }
+
+        await docRef.update(updatedFields);
+
+        const updatedSnapshot = await docRef.get();
+
+        res.status(200).json({
+            ...updatedSnapshot.data(),
+            login: {
+                uuid: req.params.id
+            }
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({
+            message: "Internal server error"
+        });
     }
-
-    const { firstName, lastName, email } = req.body;
-
-    if (firstName) {
-        user.name.first = firstName;
-    }
-
-    if (lastName) {
-        user.name.last = lastName;
-    }
-
-    if (email) {
-        user.email = email;
-    }
-
-    res.status(200).json(user);
 });
 
 /**
@@ -459,17 +536,23 @@ app.patch("/users/:id", (req, res) => {
  *       404:
  *         description: User not found
  */
-app.head("/users/:id", (req, res) => {
+app.head("/users/:id", async (req, res) => {
 
-    const exists = users.some(
-        u => u.login.uuid === req.params.id
-    );
+    try {
+        const snapshot = await db
+            .collection("users")
+            .doc(req.params.id)
+            .get();
 
-    if (!exists) {
-        return res.sendStatus(404);
+        if (!snapshot.exists) {
+            return res.sendStatus(404);
+        }
+
+        return res.sendStatus(200);
+    } catch (error) {
+        console.error(error);
+        return res.sendStatus(500);
     }
-
-    return res.sendStatus(200);
 });
 
 function sendError(res, httpCode, error) {
@@ -481,23 +564,47 @@ function sendError(res, httpCode, error) {
 
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);
+
     try {
-        const response = await fetch(
-            "https://randomuser.me/api/?results=50"
-        );
+        const snapshot = await db
+            .collection("users")
+            .limit(1)
+            .get();
+
+        if (!snapshot.empty) {
+            console.log("Users collection already contains data");
+            return;
+        }
+
+        console.log("Users collection is empty. Loading 50 users...");
+
+        const response = await fetch("https://randomuser.me/api/?results=50");
 
         if (!response.ok) {
-            return sendError(
-                res,
-                500,
-                ERRORS.RANDOM_USER_API_ERROR
-            );
+            throw new Error(`Random User API returned ${response.status}`);
         }
 
         const data = await response.json();
+        const batch = db.batch();
+        data.results.forEach(user => {
+            const docRef = db
+                .collection("users")
+                .doc(user.login.uuid);
 
-        users = data.results;
+            batch.set(docRef, {
+                gender: user.gender,
+                name: {
+                    title: user.name.title,
+                    first: user.name.first,
+                    last: user.name.last
+                },
+                email: user.email
+            });
+
+        });
+        await batch.commit();
+        console.log(`${data.results.length} users inserted`);
     } catch (error) {
-        console.error('Error getting users from random users', error);
+        console.error("Error loading initial users:", error);
     }
 });
