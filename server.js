@@ -170,7 +170,7 @@ async function authenticate(req, res, next) {
 
         const token = authHeader.split(" ")[1];
 
-        const decoded = await auth().verifyIdToken(token);
+        const decoded = await auth.verifyIdToken(token);
 
         req.user = decoded;
 
