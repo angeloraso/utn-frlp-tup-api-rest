@@ -7,13 +7,15 @@ const swaggerJsdoc = require("swagger-jsdoc");
 require("dotenv").config();
 const app = express();
 const PORT = 3000;
-const db = require("./firebase");
+const { db, auth } = require("./firebase");
 
 app.use(express.json());
 
-app.use(cors({
-    origin: "http://localhost:4200"
-}));
+app.use(
+    cors({
+        origin: "http://localhost:4200",
+    }),
+);
 
 const swaggerOptions = {
     definition: {
@@ -29,7 +31,7 @@ const swaggerOptions = {
             },
         ],
     },
-    apis: ["./server.js"]
+    apis: ["./server.js"],
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
@@ -129,6 +131,12 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
  *       description: The user's UUID
  *       example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
  *
+ *   securitySchemes:
+ *     bearerAuth:
+ *       type: http
+ *       scheme: bearer
+ *       bearerFormat: JWT
+ *
  *   responses:
  *     UserNotFound:
  *       description: User not found
@@ -150,6 +158,69 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
  *             message: "firstName, lastName and email are required."
  */
 
+async function authenticate(req, res, next) {
+    try {
+        const authHeader = req.headers.authorization;
+
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+            return res.status(401).json({
+                message: "Token required",
+            });
+        }
+
+        const token = authHeader.split(" ")[1];
+
+        const decoded = await auth().verifyIdToken(token);
+
+        req.user = decoded;
+
+        next();
+    } catch (error) {
+        return res.status(401).json({
+            message: "Invalid token",
+        });
+    }
+}
+
+/**
+ * @swagger
+ * /me:
+ *   get:
+ *     summary: Get the authenticated user profile
+ *     description: Returns the profile information of the currently authenticated user from the Firebase token.
+ *     tags:
+ *       - Auth
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Authenticated user profile
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 uid:
+ *                   type: string
+ *                   example: "abc123"
+ *                 email:
+ *                   type: string
+ *                   format: email
+ *                   example: "john.doe@example.com"
+ *                 name:
+ *                   type: string
+ *                   example: "John Doe"
+ *       401:
+ *         description: Unauthorized
+ */
+app.get("/me", authenticate, async (req, res) => {
+    res.status(200).json({
+        uid: req.user.uid,
+        email: req.user.email,
+        name: req.user.name,
+    });
+});
+
 /**
  * @swagger
  * /users:
@@ -168,17 +239,14 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
  *               items:
  *                 $ref: '#/components/schemas/User'
  */
-app.get("/users", async (req, res) => {
+app.get("/users", authenticate, async (req, res) => {
+    const snapshot = await db.collection("users").get();
 
-    const snapshot = await db
-        .collection("users")
-        .get();
-
-    const users = snapshot.docs.map(doc => ({
+    const users = snapshot.docs.map((doc) => ({
         login: {
-            uuid: doc.id
+            uuid: doc.id,
         },
-        ...doc.data()
+        ...doc.data(),
     }));
 
     res.status(200).json(users);
@@ -201,7 +269,7 @@ app.get("/users", async (req, res) => {
  *               type: string
  *               example: "GET, POST, PUT, PATCH, DELETE"
  */
-app.options("/users", (req, res) => {
+app.options("/users", authenticate, (req, res) => {
     res.set("Allow", "GET, POST, PUT, PATCH, DELETE");
     res.sendStatus(204);
 });
@@ -226,26 +294,18 @@ app.options("/users", (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.get("/users/:id", async (req, res) => {
-
-    const doc = await db
-        .collection("users")
-        .doc(req.params.id)
-        .get();
+app.get("/users/:id", authenticate, async (req, res) => {
+    const doc = await db.collection("users").doc(req.params.id).get();
 
     if (!doc.exists) {
-        return sendError(
-            res,
-            404,
-            ERRORS.USER_NOT_FOUND
-        );
+        return sendError(res, 404, ERRORS.USER_NOT_FOUND);
     }
 
     res.status(200).json({
         login: {
-            uuid: doc.id
+            uuid: doc.id,
         },
-        ...doc.data()
+        ...doc.data(),
     });
 });
 
@@ -265,12 +325,8 @@ app.get("/users/:id", async (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.delete("/users/:id", async (req, res) => {
-
-    await db
-        .collection("users")
-        .doc(req.params.id)
-        .delete();
+app.delete("/users/:id", authenticate, async (req, res) => {
+    await db.collection("users").doc(req.params.id).delete();
 
     res.status(204).send();
 });
@@ -299,16 +355,11 @@ app.delete("/users/:id", async (req, res) => {
  *       400:
  *         $ref: '#/components/responses/InvalidUserData'
  */
-app.post("/users", async (req, res) => {
-
+app.post("/users", authenticate, async (req, res) => {
     const { firstName, lastName, email } = req.body;
 
     if (!firstName || !lastName || !email) {
-        return sendError(
-            res,
-            400,
-            ERRORS.INVALID_USER_DATA
-        );
+        return sendError(res, 400, ERRORS.INVALID_USER_DATA);
     }
 
     try {
@@ -318,26 +369,23 @@ app.post("/users", async (req, res) => {
             name: {
                 title: "",
                 first: firstName,
-                last: lastName
+                last: lastName,
             },
-            email
+            email,
         };
 
-        await db
-            .collection("users")
-            .doc(uuid)
-            .set(user);
+        await db.collection("users").doc(uuid).set(user);
 
         res.status(201).json({
             ...user,
             login: {
-                uuid
-            }
+                uuid,
+            },
         });
     } catch (error) {
         console.error(error);
         res.status(500).json({
-            message: "Internal server error"
+            message: "Internal server error",
         });
     }
 });
@@ -370,31 +418,20 @@ app.post("/users", async (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.put("/users/:id", async (req, res) => {
-
+app.put("/users/:id", authenticate, async (req, res) => {
     const { firstName, lastName, email } = req.body;
 
     if (!firstName || !lastName || !email) {
-        return sendError(
-            res,
-            400,
-            ERRORS.INVALID_USER_DATA
-        );
+        return sendError(res, 400, ERRORS.INVALID_USER_DATA);
     }
 
     try {
-        const docRef = db
-            .collection("users")
-            .doc(req.params.id);
+        const docRef = db.collection("users").doc(req.params.id);
 
         const snapshot = await docRef.get();
 
         if (!snapshot.exists) {
-            return sendError(
-                res,
-                404,
-                ERRORS.USER_NOT_FOUND
-            );
+            return sendError(res, 404, ERRORS.USER_NOT_FOUND);
         }
 
         const updatedUser = {
@@ -402,9 +439,9 @@ app.put("/users/:id", async (req, res) => {
             name: {
                 title: "",
                 first: firstName,
-                last: lastName
+                last: lastName,
             },
-            email
+            email,
         };
 
         await docRef.set(updatedUser);
@@ -412,14 +449,13 @@ app.put("/users/:id", async (req, res) => {
         res.status(200).json({
             ...updatedUser,
             login: {
-                uuid: req.params.id
-            }
+                uuid: req.params.id,
+            },
         });
-
     } catch (error) {
         console.error(error);
         res.status(500).json({
-            message: "Internal server error"
+            message: "Internal server error",
         });
     }
 });
@@ -450,52 +486,39 @@ app.put("/users/:id", async (req, res) => {
  *       404:
  *         $ref: '#/components/responses/UserNotFound'
  */
-app.patch("/users/:id", async (req, res) => {
-
+app.patch("/users/:id", authenticate, async (req, res) => {
     try {
-        const docRef = db
-            .collection("users")
-            .doc(req.params.id);
+        const docRef = db.collection("users").doc(req.params.id);
 
         const snapshot = await docRef.get();
 
         if (!snapshot.exists) {
-            return sendError(
-                res,
-                404,
-                ERRORS.USER_NOT_FOUND
-            );
+            return sendError(res, 404, ERRORS.USER_NOT_FOUND);
         }
 
         const currentUser = snapshot.data();
 
-        const {
-            firstName,
-            lastName,
-            email
-        } = req.body;
+        const { firstName, lastName, email } = req.body;
 
         const updatedFields = {};
 
         if (firstName) {
             updatedFields.name = {
                 ...currentUser.name,
-                first: firstName
+                first: firstName,
             };
-
         }
 
         if (lastName) {
             updatedFields.name = updatedFields.name
                 ? {
                     ...updatedFields.name,
-                    last: lastName
+                    last: lastName,
                 }
                 : {
                     ...currentUser.name,
-                    last: lastName
+                    last: lastName,
                 };
-
         }
 
         if (email) {
@@ -509,13 +532,13 @@ app.patch("/users/:id", async (req, res) => {
         res.status(200).json({
             ...updatedSnapshot.data(),
             login: {
-                uuid: req.params.id
-            }
+                uuid: req.params.id,
+            },
         });
     } catch (error) {
         console.error(error);
         res.status(500).json({
-            message: "Internal server error"
+            message: "Internal server error",
         });
     }
 });
@@ -536,13 +559,9 @@ app.patch("/users/:id", async (req, res) => {
  *       404:
  *         description: User not found
  */
-app.head("/users/:id", async (req, res) => {
-
+app.head("/users/:id", authenticate, async (req, res) => {
     try {
-        const snapshot = await db
-            .collection("users")
-            .doc(req.params.id)
-            .get();
+        const snapshot = await db.collection("users").doc(req.params.id).get();
 
         if (!snapshot.exists) {
             return res.sendStatus(404);
@@ -558,7 +577,7 @@ app.head("/users/:id", async (req, res) => {
 function sendError(res, httpCode, error) {
     return res.status(httpCode).json({
         code: error.code,
-        message: error.message
+        message: error.message,
     });
 }
 
@@ -566,10 +585,7 @@ app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);
 
     try {
-        const snapshot = await db
-            .collection("users")
-            .limit(1)
-            .get();
+        const snapshot = await db.collection("users").limit(1).get();
 
         if (!snapshot.empty) {
             console.log("Users collection already contains data");
@@ -586,21 +602,18 @@ app.listen(PORT, async () => {
 
         const data = await response.json();
         const batch = db.batch();
-        data.results.forEach(user => {
-            const docRef = db
-                .collection("users")
-                .doc(user.login.uuid);
+        data.results.forEach((user) => {
+            const docRef = db.collection("users").doc(user.login.uuid);
 
             batch.set(docRef, {
                 gender: user.gender,
                 name: {
                     title: user.name.title,
                     first: user.name.first,
-                    last: user.name.last
+                    last: user.name.last,
                 },
-                email: user.email
+                email: user.email,
             });
-
         });
         await batch.commit();
         console.log(`${data.results.length} users inserted`);
