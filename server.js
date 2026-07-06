@@ -248,7 +248,7 @@ app.put("/role", authenticate, async (req, res) => {
     }
 
     try {
-        await auth.setCustomUserClaims(uid, { role: role });
+        await auth.setCustomUserClaims(req.user.uid, { role: role });
         res.status(200).json({ message: `Role ${role} assigned successfully to ${uid}` });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -276,12 +276,7 @@ app.put("/role", authenticate, async (req, res) => {
 app.get("/users", authenticate, isProfessor, async (req, res) => {
     const snapshot = await db.collection("users").get();
 
-    const users = snapshot.docs.map((doc) => ({
-        login: {
-            uuid: doc.id,
-        },
-        ...doc.data(),
-    }));
+    const users = snapshot.docs.map((doc) => (doc.data()));
 
     res.status(200).json(users);
 });
