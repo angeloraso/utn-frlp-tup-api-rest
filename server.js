@@ -249,7 +249,7 @@ app.put("/role", authenticate, async (req, res) => {
 
     try {
         await auth.setCustomUserClaims(req.user.uid, { role: role });
-        res.status(200).json({ message: `Role ${role} assigned successfully to ${uid}` });
+        res.status(200).json({ message: `Role ${role} assigned successfully to ${req.user.uid}` });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
