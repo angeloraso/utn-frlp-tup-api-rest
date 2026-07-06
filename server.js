@@ -365,6 +365,7 @@ app.post("/users", authenticate, async (req, res) => {
     try {
         const uuid = crypto.randomUUID();
         const user = {
+            id: uuid,
             gender: null,
             name: {
                 title: "",
@@ -376,12 +377,7 @@ app.post("/users", authenticate, async (req, res) => {
 
         await db.collection("users").doc(uuid).set(user);
 
-        res.status(201).json({
-            ...user,
-            login: {
-                uuid,
-            },
-        });
+        res.status(201).json(user);
     } catch (error) {
         console.error(error);
         res.status(500).json({
@@ -435,6 +431,7 @@ app.put("/users/:id", authenticate, async (req, res) => {
         }
 
         const updatedUser = {
+            id: snapshot.data().id,
             gender: snapshot.data().gender,
             name: {
                 title: "",
@@ -446,12 +443,7 @@ app.put("/users/:id", authenticate, async (req, res) => {
 
         await docRef.set(updatedUser);
 
-        res.status(200).json({
-            ...updatedUser,
-            login: {
-                uuid: req.params.id,
-            },
-        });
+        res.status(200).json(updatedUser);
     } catch (error) {
         console.error(error);
         res.status(500).json({
@@ -529,12 +521,7 @@ app.patch("/users/:id", authenticate, async (req, res) => {
 
         const updatedSnapshot = await docRef.get();
 
-        res.status(200).json({
-            ...updatedSnapshot.data(),
-            login: {
-                uuid: req.params.id,
-            },
-        });
+        res.status(200).json(updatedSnapshot.data());
     } catch (error) {
         console.error(error);
         res.status(500).json({
@@ -604,8 +591,8 @@ app.listen(PORT, async () => {
         const batch = db.batch();
         data.results.forEach((user) => {
             const docRef = db.collection("users").doc(user.login.uuid);
-
             batch.set(docRef, {
+                id: user.login.uuid,
                 gender: user.gender,
                 name: {
                     title: user.name.title,
