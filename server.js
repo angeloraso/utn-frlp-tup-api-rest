@@ -236,7 +236,7 @@ app.get("/me", authenticate, async (req, res) => {
     });
 });
 
-app.post("/set-role", authenticate, async (req, res) => {
+app.post("/role", authenticate, async (req, res) => {
     if (!req.user || !req.user.uid) {
         return res.status(401).json({ message: "Authentication required" });
     }
