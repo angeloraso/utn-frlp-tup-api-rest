@@ -182,6 +182,20 @@ async function authenticate(req, res, next) {
     }
 }
 
+function isProfessor(req, res, next) {
+    if (!req.user) {
+        return res.status(401).json({ message: "Authentication required" });
+    }
+
+    if (req.user.role !== "professor") {
+        return res.status(403).json({ 
+            message: "Access denied. Only professors can access this resource." 
+        });
+    }
+
+    next();
+}
+
 /**
  * @swagger
  * /me:
@@ -218,7 +232,27 @@ app.get("/me", authenticate, async (req, res) => {
         uid: req.user.uid,
         email: req.user.email,
         name: req.user.name,
+        role: req.user.role
     });
+});
+
+app.post("/set-role", authenticate, async (req, res) => {
+    if (!req.user || !req.user.uid) {
+        return res.status(401).json({ message: "Authentication required" });
+    }
+
+    const { role } = req.body;
+
+    if (role !== "professor" && role !== "student") {
+        return res.status(400).json({ message: "Invalid role" });
+    }
+
+    try {
+        await auth.setCustomUserClaims(uid, { role: role });
+        res.status(200).json({ message: `Role ${role} assigned successfully to ${uid}` });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 /**
@@ -239,7 +273,7 @@ app.get("/me", authenticate, async (req, res) => {
  *               items:
  *                 $ref: '#/components/schemas/User'
  */
-app.get("/users", authenticate, async (req, res) => {
+app.get("/users", authenticate, isProfessor, async (req, res) => {
     const snapshot = await db.collection("users").get();
 
     const users = snapshot.docs.map((doc) => ({
